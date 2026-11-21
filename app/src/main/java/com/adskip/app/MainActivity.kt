@@ -256,10 +256,16 @@ class MainActivity : Activity() {
         refreshing = true
         try {
             val on = isA11yOn()
+            val ver = try {
+                packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+            } catch (t: Throwable) {
+                ""
+            }
+            val verText = if (ver.isEmpty()) "" else "   （v" + ver + "）"
             statusView.text = if (on) {
-                "无障碍服务：已开启 ✓"
+                "无障碍服务：已开启 ✓" + verText
             } else {
-                "无障碍服务：未开启 ✗  点下面第①个按钮，找到「跳过广告」并打开"
+                "无障碍服务：未开启 ✗  点下面第①个按钮，找到「跳过广告」并打开" + verText
             }
             masterSwitch.isChecked = Prefs.masterEnabled(this)
             aggressiveSwitch.isChecked = Prefs.aggressive(this)

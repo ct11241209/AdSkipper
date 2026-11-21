@@ -27,6 +27,7 @@ class RuleEngine(private val ctx: Context) {
     private val skipIds = ArrayList<String>()
     private val appSkip = HashMap<String, List<Regex>>()
     private val appClose = HashMap<String, List<Regex>>()
+    private val appSplashOnlyMs = HashMap<String, Long>()
 
     fun load() {
         skipRegex.clear()
@@ -35,6 +36,7 @@ class RuleEngine(private val ctx: Context) {
         skipIds.clear()
         appSkip.clear()
         appClose.clear()
+        appSplashOnlyMs.clear()
         val text = try {
             ctx.assets.open("rules.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
         } catch (t: Throwable) {
@@ -63,6 +65,8 @@ class RuleEngine(private val ctx: Context) {
                     val o = apps.optJSONObject(pkg) ?: continue
                     appSkip[pkg] = compile(o.optJSONArray("skipPatterns"))
                     appClose[pkg] = compile(o.optJSONArray("closePatterns"))
+                    val only = o.optLong("splashOnlyMs", 0L)
+                    if (only > 0L) appSplashOnlyMs[pkg] = only
                 }
             }
             LogStore.log(
@@ -99,10 +103,18 @@ class RuleEngine(private val ctx: Context) {
     }
 
     fun isSkipText(text: String?, pkg: String): Boolean {
-        if (matchAny(skipRegex, text, 24)) return true
+        if (matchAny(skipRegex, text, 16)) return true
         val extra = appSkip[pkg] ?: return false
-        return matchAny(extra, text, 24)
+        return matchAny(extra, text, 16)
     }
+
+    /**
+     * 某个 App 是否只在「刚启动的一段窗口内」工作（毫秒），0 = 全程工作。
+     *
+     * 贴吧这类 App：开屏广告只在冷启动时出现，之后整屏都是信息流正文，
+     * 全时段自动点「跳过/关闭」很容易点到帖子和卡片，所以用这个限定时间窗。
+     */
+    fun splashOnlyMs(pkg: String): Long = appSplashOnlyMs[pkg] ?: 0L
 
     /**
      * @param aggressive 是否启用了「激进模式」

@@ -11,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 /**
  * 核心：无障碍自动跳广告。
@@ -19,13 +20,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  *  1. 只订阅「窗口切换」和「窗口内容变化」两类事件，不轮询；
  *  2. 只有窗口刚出现的一段时间内才处理内容变化事件，之后彻底闲着；
  *  3. 扫描跑在独立后台线程，不占主线程，也不会常驻唤醒 CPU；
- *  4. 每个窗口最多点 8 次，点完就收手。
+ *  4. 每个窗口最多点 4 次，点完就收手。
  *
- * 防误点策略：
- *  - 「跳过」类（高置信度）任何时候都点；
- *  - 「关闭广告/残忍离开/以后再说」类只在 App 刚进前台 12 秒内点，且必须是可点控件，
- *    绝不对手势兜底（避免点到广告的"下载"按钮）；
- *  - 「关闭 / × / 我知道了」这类通用文案，只有用户手动开「激进模式」才点。
+ * 防误点策略（v3 加强，重点针对贴吧这类信息流 App）：
+ *  1. 「跳过」类（高置信度）任何时候都点；「关闭类」只在 App 刚进前台 12 秒内点；
+ *  2. 只点「按钮尺寸」的控件：超过屏幕 6% 面积 / 70% 宽 / 25% 高的，一律不点；
+ *  3. 控件在列表容器（RecyclerView / ListView / ViewPager…）里，一律当信息流内容放过；
+ *  4. 点「跳过」时优先点它自己（自己可点就点，不可点在它中心戳一下），
+ *     绝不为了点它而爬到整块广告的父容器上——那等于点了广告；
+ *  5. 同一位置 6 秒内不重复点；
+ *  6. rules.json 里可以用 splashOnlyMs 给某个 App 限定「只在前 N 秒干活」。
  */
 class AdSkipService : AccessibilityService() {
 
@@ -33,9 +37,26 @@ class AdSkipService : AccessibilityService() {
         private const val MAX_NODES = 2000
         private const val MAX_DEPTH = 40
         private const val MIN_CLICK_INTERVAL_MS = 320L
-        private const val MAX_CLICKS_PER_WINDOW = 8
+        private const val MAX_CLICKS_PER_WINDOW = 4
         private const val CONTENT_SCAN_WINDOW_MS = 25000L
         private const val SCAN_MIN_GAP_MS = 130L
+
+        /** 同一个位置刚点过就别再点，防止在一块内容上连点 */
+        private const val SAME_SPOT_COOLDOWN_MS = 6000L
+
+        /** 点击目标必须是「按钮尺寸」，超过这些比例的一律不点（单位：%） */
+        private const val MAX_TARGET_AREA_PCT = 6
+        private const val MAX_TARGET_WIDTH_PCT = 70
+        private const val MAX_TARGET_HEIGHT_PCT = 25
+
+        /**
+         * 这些容器里的文字是信息流 / 列表内容，不是广告按钮。
+         * 刻意不含 ViewPager：不少开屏广告用 ViewPager 做多素材轮播，把「跳过」放在里面，
+         * 把它一起拦掉会误伤开屏广告本身。
+         */
+        private val LIST_CLASS_HINTS = arrayOf(
+            "RecyclerView", "ListView", "GridView", "AbsListView"
+        )
 
         @Volatile
         var connected = false
@@ -76,7 +97,12 @@ class AdSkipService : AccessibilityService() {
         val gestureOk: Boolean
     )
 
-    private class ScanResult(val cand: Cand?, val visited: Int)
+    private class ScanResult(
+        val cand: Cand?,
+        val visited: Int,
+        /** 命中了、但因为护栏没点（用于在「上次扫描结果」里解释原因） */
+        val guardNote: String? = null
+    )
 
     private var rules: RuleEngine? = null
     private var thread: HandlerThread? = null
@@ -90,6 +116,8 @@ class AdSkipService : AccessibilityService() {
     private var lastScanAt = 0L
     private var clicksInWindow = 0
     private var lastClickAt = 0L
+    private var lastClickBounds: Rect? = null
+    private var lastGuardNote: String? = null
 
     @Volatile
     private var lastSummary: String = ""
@@ -157,6 +185,8 @@ class AdSkipService : AccessibilityService() {
                 windowStart = now
                 clicksInWindow = 0
                 lastScanAt = 0L
+                lastClickBounds = null
+                lastGuardNote = null
                 scheduleScan(50L)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
@@ -203,17 +233,51 @@ class AdSkipService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: return
         if (isExcluded(pkg)) return
 
-        val result = findBest(r, root, pkg, now - appSessionStart)
+        val appAge = now - appSessionStart
+
+        // 有些 App（贴吧就是典型）只在启动那一会儿有开屏广告，之后整屏都是信息流。
+        // 这类 App 用 rules.json 的 splashOnlyMs 限定「只在前 N 秒干活」，彻底免掉刷帖时的误点。
+        val splashOnly = r.splashOnlyMs(pkg)
+        if (splashOnly > 0 && appAge > splashOnly) return
+
+        val dm = resources.displayMetrics
+        val sw = if (dm.widthPixels > 0) dm.widthPixels else 1080
+        val sh = if (dm.heightPixels > 0) dm.heightPixels else 2340
+
+        val result = findBest(r, root, pkg, appAge, sw, sh)
         val cand = result.cand
+
         if (cand == null) {
-            lastSummary = pkg + "：扫描 " + result.visited + " 个节点，没找到可点的跳过/关闭按钮"
+            val note = result.guardNote
+            lastSummary = if (note != null) {
+                pkg + "：扫描 " + result.visited + " 个节点，命中过按钮但" + note + "\n" +
+                    "→ 已主动放过（防误点），这是正常的，不是你设置错了。"
+            } else {
+                pkg + "：扫描 " + result.visited + " 个节点，没找到可点的跳过/关闭按钮"
+            }
+            if (note != null && note != lastGuardNote) {
+                lastGuardNote = note
+                LogStore.log("GUARD", pkg + "  " + note + "  已放过")
+            }
             return
         }
 
-        val ok = clickNode(cand)
+        // 同一位置 6 秒内不重复点：误点也不会连点好几下
+        val cb = boundsOf(cand.node)
+        val prev = lastClickBounds
+        if (cb != null && prev != null &&
+            now - lastClickAt < SAME_SPOT_COOLDOWN_MS &&
+            abs(cb.centerX() - prev.centerX()) < 24 &&
+            abs(cb.centerY() - prev.centerY()) < 24
+        ) {
+            return
+        }
+
+        val ok = clickNode(cand, sw, sh)
         if (ok) {
             lastClickAt = SystemClock.elapsedRealtime()
             clicksInWindow++
+            lastClickBounds = cb?.let { Rect(it) }
             Prefs.bumpCount(this)
             lastSummary = pkg + "：命中【" + cand.label + "】score=" + cand.score
             LogStore.log("CLICK", pkg + "  " + cand.label + "  score=" + cand.score)
@@ -225,26 +289,25 @@ class AdSkipService : AccessibilityService() {
 
     /**
      * 广度优先遍历当前窗口，找出最像「跳过/关闭广告」的那个控件。
+     *
+     * 注意：inList() / targetOk() 这类父链检查只在「已经命中」的节点上做，
+     * 不会对 2000 个节点全做一遍（那要走几万次跨进程调用，太慢）。
      */
     private fun findBest(
         r: RuleEngine,
         root: AccessibilityNodeInfo,
         pkg: String,
-        appAge: Long
+        appAge: Long,
+        sw: Int,
+        sh: Int
     ): ScanResult {
-        val screen = Rect()
-        try {
-            root.getBoundsInScreen(screen)
-        } catch (t: Throwable) {
-        }
-        val sw = if (screen.width() > 0) screen.width() else 1080
-        val sh = if (screen.height() > 0) screen.height() else 2340
         val screenArea = sw.toLong() * sh.toLong()
         // 只有 App 刚进前台的 12 秒内，才允许点「关闭类」
         val allowClose = appAge < r.launchWindowMs
         val aggressive = Prefs.aggressive(this)
 
         var best: Cand? = null
+        var guardNote: String? = null
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
         var visited = 0
@@ -270,13 +333,7 @@ class AdSkipService : AccessibilityService() {
                 if (c != null) queue.add(c to (depth + 1))
             }
 
-            val bounds = Rect()
-            try {
-                node.getBoundsInScreen(bounds)
-            } catch (t: Throwable) {
-                continue
-            }
-            if (bounds.width() <= 0 || bounds.height() <= 0) continue
+            val bounds = boundsOf(node) ?: continue
             val area = bounds.width().toLong() * bounds.height().toLong()
             if (area > screenArea * 85L / 100L) continue
 
@@ -302,6 +359,22 @@ class AdSkipService : AccessibilityService() {
             }
             if (score == 0) continue
 
+            // 护栏 1：尺寸不像按钮 → 多半是整块广告、卡片或标记牌，点了就打开内容
+            if (!targetOk(bounds, sw, sh)) {
+                if (guardNote == null) {
+                    guardNote = "命中的【" + label + "】尺寸不像按钮（占屏 " + (area * 100 / screenArea) + "%）"
+                }
+                continue
+            }
+
+            // 护栏 2：在列表容器里 → 这是信息流正文（标题/楼层/广告卡标签），点了就进内容
+            if (inList(node, sw, sh)) {
+                if (guardNote == null) {
+                    guardNote = "命中的【" + label + "】在列表容器里（像信息流内容）"
+                }
+                continue
+            }
+
             // 跳过按钮绝大多数在右上角，位置加分
             if (bounds.centerX() > sw / 2) score += 6
             if (bounds.centerY() < sh * 2 / 5) score += 6
@@ -315,7 +388,7 @@ class AdSkipService : AccessibilityService() {
                 best = Cand(node, score, label, gestureOk)
             }
         }
-        return ScanResult(best, visited)
+        return ScanResult(best, visited, guardNote)
     }
 
     private fun textOrDesc(
@@ -330,11 +403,26 @@ class AdSkipService : AccessibilityService() {
         return false
     }
 
-    private fun clickNode(cand: Cand): Boolean {
+    /**
+     * 真正执行一次点击。顺序刻意设计成「先点按钮自己，再考虑父控件」：
+     *
+     * 很多开屏广告把「跳过」文字和整块广告图片放在同一个可点容器里，
+     * 一旦往上爬到那个父容器去点，就等于点了广告本身，会跳进广告落地页
+     * ——用户的感觉就是「广告没跳过，反而点进去了」。
+     */
+    private fun clickNode(cand: Cand, sw: Int, sh: Int): Boolean {
         val node = cand.node
+
+        // 1) 自己就是可点的按钮
         if (node.isClickable && safePerform(node)) return true
 
-        // 往上找 3 层可点的父控件（很多跳过的文字在不可点的 TextView 里）
+        // 2) 「跳过」类：直接在它自己的中心戳一下（视觉上那个按钮就在那儿）
+        if (cand.gestureOk) {
+            val b = boundsOf(node)
+            if (b != null && targetOk(b, sw, sh) && tapCenter(b)) return true
+        }
+
+        // 3) 再往上找 3 层可点的父控件，但父控件同样必须像按钮，且不能在列表里
         var p = try {
             node.parent
         } catch (t: Throwable) {
@@ -342,7 +430,10 @@ class AdSkipService : AccessibilityService() {
         }
         var i = 0
         while (p != null && i < 3) {
-            if (p.isClickable && safePerform(p)) return true
+            val pb = boundsOf(p)
+            if (pb != null && targetOk(pb, sw, sh) && !inList(p, sw, sh) && p.isClickable) {
+                return safePerform(p)
+            }
             p = try {
                 p.parent
             } catch (t: Throwable) {
@@ -350,26 +441,10 @@ class AdSkipService : AccessibilityService() {
             }
             i++
         }
+        return false
+    }
 
-        if (!cand.gestureOk) return false
-
-        // 兜底：按坐标手势点击中心点
-        val b = Rect()
-        try {
-            node.getBoundsInScreen(b)
-        } catch (t: Throwable) {
-            return false
-        }
-        if (b.width() <= 0 || b.height() <= 0) return false
-
-        // 兜底手势只在「小而靠边」的控件上做，避免点到整块广告的下载按钮
-        val dm = resources.displayMetrics
-        val sw = if (dm.widthPixels > 0) dm.widthPixels else 1080
-        val sh = if (dm.heightPixels > 0) dm.heightPixels else 2340
-        val small = b.width().toLong() * b.height().toLong() < sw.toLong() * sh.toLong() / 6L
-        val cornerish = b.centerY() < sh * 2 / 5 || b.centerX() > sw * 2 / 3
-        if (!small || !cornerish) return false
-
+    private fun tapCenter(b: Rect): Boolean {
         val path = Path()
         path.moveTo(b.exactCenterX(), b.exactCenterY())
         val gd = GestureDescription.Builder()
@@ -386,6 +461,75 @@ class AdSkipService : AccessibilityService() {
         n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     } catch (t: Throwable) {
         false
+    }
+
+    private fun boundsOf(n: AccessibilityNodeInfo): Rect? {
+        val r = Rect()
+        return try {
+            n.getBoundsInScreen(r)
+            if (r.width() > 0 && r.height() > 0) r else null
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** 点击目标必须是「按钮尺寸」：整块广告 / 卡片 / 半个屏幕的容器都过不了这一关 */
+    private fun targetOk(b: Rect, sw: Int, sh: Int): Boolean {
+        val area = b.width().toLong() * b.height().toLong()
+        val screen = sw.toLong() * sh.toLong()
+        if (area <= 0L) return false
+        if (area > screen * MAX_TARGET_AREA_PCT / 100L) return false
+        if (b.width() > sw * MAX_TARGET_WIDTH_PCT / 100) return false
+        if (b.height() > sh * MAX_TARGET_HEIGHT_PCT / 100) return false
+        return true
+    }
+
+    /**
+     * 这个控件是不是在「列表容器」里（信息流、帖子列表、广告卡片列表）。
+     *
+     * 判断两件事：
+     *  1. 祖先里有 RecyclerView / ListView / GridView 这类类名；
+     *  2. 祖先自己 isScrollable、铺满大半屏、挂着 3 个以上条目（自定义列表的兜底判断）。
+     *
+     * 刻意不把 ViewPager 算进来：开屏广告常用 ViewPager 轮播素材，「跳过」就在里面。
+     */
+    private fun inList(start: AccessibilityNodeInfo, sw: Int, sh: Int): Boolean {
+        var n: AccessibilityNodeInfo? = start
+        var i = 0
+        while (n != null && i < 8) {
+            val cls = try {
+                n.className?.toString() ?: ""
+            } catch (t: Throwable) {
+                ""
+            }
+            for (h in LIST_CLASS_HINTS) {
+                if (cls.contains(h, ignoreCase = true)) return true
+            }
+            val b = boundsOf(n)
+            val scrollable = try {
+                n.isScrollable
+            } catch (t: Throwable) {
+                false
+            }
+            val childCount = try {
+                n.childCount
+            } catch (t: Throwable) {
+                0
+            }
+            // 兜底：铺满大半屏、能滚、里面挂着一堆条目的容器，就是信息流列表（自定义列表也能认出来）
+            if (scrollable && b != null && childCount >= 3 &&
+                b.width() > sw * 85 / 100 && b.height() > sh * 50 / 100
+            ) {
+                return true
+            }
+            n = try {
+                n.parent
+            } catch (t: Throwable) {
+                null
+            }
+            i++
+        }
+        return false
     }
 
     private fun isExcluded(pkg: String): Boolean {

@@ -1,16 +1,18 @@
 {
-  "version": 2,
+  "version": 3,
   "launchWindowMs": 12000,
+
+  "_说明": "跳/关规则。注意：不要往 skipPatterns 里加「广告」这种纯标签词，信息流里每条广告卡都有「广告」标签，点了就是点进广告。apps 里可以给单个 App 加 splashOnlyMs（只在前 N 毫秒内工作）和专属正则。",
+
   "skipPatterns": [
     "^跳过",
     "^点击跳过",
     "跳过.{0,8}(广告|\\d+\\s*[s秒S])",
-    "^skip(\\s*ad)?$",
-    "^skip\\b",
     "^关闭广告$",
-    "^广告$",
-    "^广告倒计时"
+    "^skip(\\s*ad)?$",
+    "^skip\\b"
   ],
+
   "closePatterns": [
     "^关闭广告$",
     "^残忍离开$",
@@ -20,6 +22,7 @@
     "^skip$",
     "^close ad$"
   ],
+
   "aggressiveClosePatterns": [
     "^关闭$",
     "^×$",
@@ -33,6 +36,7 @@
     "^no,? thanks$",
     "^not now$"
   ],
+
   "skipIds": [
     "btn_skip",
     "tv_skip",
@@ -46,5 +50,17 @@
     "iv_skip",
     "img_skip"
   ],
-  "apps": {}
+
+  "apps": {
+    "com.baidu.tieba": {
+      "splashOnlyMs": 15000,
+      "skipPatterns": ["^跳过\\s*\\d*\\s*[sS秒]?$"],
+      "closePatterns": ["^关闭广告$"]
+    },
+    "com.taobao.idlefish": {
+      "splashOnlyMs": 15000,
+      "skipPatterns": ["^跳过\\s*\\d*\\s*[sS秒]?$"],
+      "closePatterns": ["^关闭广告$"]
+    }
+  }
 }
