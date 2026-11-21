@@ -1,0 +1,134 @@
+# ===================================================================
+# 广告域名黑名单（DNS 拦截层用）
+# 一行一个域名，命中「本身」或「任意子域」都会被拦截。
+# 只写精确的广告域名，绝对不要写 qq.com / baidu.com 这种大域！
+# 以 # 开头是注释。
+#
+# 这份是保守的起步名单，能干掉一部分开屏/插屏/激励视频的广告资源。
+# 想加：把新域名按一行一个追加到文件末尾，重新编译即可。
+# 想临时排除某个：在域名前加 # 注释掉。
+# ===================================================================
+
+# ---------- 字节跳动 / 穿山甲（pangle）----------
+pangolin-sdk-toutiao.com
+pglstatp-toutiao.com
+ad.toutiao.com
+ad.ixigua.com
+ad.bytecdn.cn
+
+# ---------- 腾讯 / 广点通 ----------
+gdt.qq.com
+e.qq.com
+pgdt.gtimg.cn
+pgdt.ugdtimg.com
+adsmind.gdtimg.com
+ad.qq.com
+adsmind.gtimg.com
+
+# ---------- 阿里 / 阿里妈妈 ----------
+tanx.com
+alimama.com
+adash.m.taobao.com
+adash.man.aliyuncs.com
+
+# ---------- 百度 ----------
+mobads.baidu.com
+mobads-logs.baidu.com
+cpro.baidu.com
+pos.baidu.com
+dup.baidustatic.com
+
+# ---------- 快手 ----------
+ad.kuaishou.com
+adstatic.kuaishou.com
+
+# ---------- 其它国内广告 / 监测平台 ----------
+miaozhen.com
+admaster.com.cn
+irs01.com
+irs01.net
+adchina.com
+allyes.com
+mediav.com
+chanet.com.cn
+adview.cn
+adwo.com
+
+# ---------- 海外 SSP / 广告网络 ----------
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+adservice.google.com
+amazon-adsystem.com
+applovin.com
+api.applovin.com
+unityads.unity3d.com
+auction.unityads.unity3d.com
+ads.unitychina.cn
+vungle.com
+api.vungle.com
+adcolony.com
+chartboost.com
+tapjoy.com
+ironsrc.com
+supersonicads.com
+inmobi.com
+ads.inmobi.com
+mintegral.com
+mbridgetech.com
+adnxs.com
+appnexus.com
+rubiconproject.com
+pubmatic.com
+openx.net
+criteo.com
+criteo.net
+smartadserver.com
+smaato.net
+startapp.com
+fyber.com
+mopub.com
+bidswitch.net
+casalemedia.com
+33across.com
+sharethrough.com
+teads.tv
+taboola.com
+outbrain.com
+mgid.com
+propellerads.com
+popads.net
+revcontent.com
+adpushup.com
+
+# ===================================================================
+# 下面两组默认关掉（已注释），按需自行开启：
+#
+# 【归因 / 统计类】——拦了会让 App 的「数据统计」失效，一般不影响使用，
+#   个别 App 会因此启动变慢或某些功能异常，所以默认不开。
+#
+# appsflyer.com
+# adjust.com
+# branch.io
+# kochava.com
+# singular.net
+# umeng.com
+# umengcloud.com
+# cnzz.com
+# talkingdata.com
+# talkingdata.net
+# bugly.qq.com
+#
+# 【有误伤风险】——可能影响推送、分享、登录、图片加载，默认不开。
+#   如果某个 App 开 DNS 层后不正常，先检查是不是这里被打开了。
+#
+# snssdk.com          # 抖音/今日头条主域名，拦了整个 App 就废
+# weibo.cn
+# zhihu.com
+# xiaohongshu.com
+# qq.com
+# weixin.qq.com
+# alipay.com
+# taobao.com
+# jd.com
+# ===================================================================

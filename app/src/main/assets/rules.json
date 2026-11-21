@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "launchWindowMs": 12000,
+  "skipPatterns": [
+    "^跳过",
+    "^点击跳过",
+    "跳过.{0,8}(广告|\\d+\\s*[s秒S])",
+    "^skip(\\s*ad)?$",
+    "^skip\\b",
+    "^关闭广告$",
+    "^广告$",
+    "^广告倒计时"
+  ],
+  "closePatterns": [
+    "^关闭广告$",
+    "^残忍离开$",
+    "^以后再说$",
+    "^下次再说$",
+    "^直接进入$",
+    "^skip$",
+    "^close ad$"
+  ],
+  "aggressiveClosePatterns": [
+    "^关闭$",
+    "^×$",
+    "^x$",
+    "^X$",
+    "^我知道了$",
+    "^我知道啦$",
+    "^不感兴趣$",
+    "^暂时不需要$",
+    "^close$",
+    "^no,? thanks$",
+    "^not now$"
+  ],
+  "skipIds": [
+    "btn_skip",
+    "tv_skip",
+    "skip_btn",
+    "skipview",
+    "skip_view",
+    "ad_skip",
+    "adskip",
+    "splash_skip",
+    "skip_ad",
+    "iv_skip",
+    "img_skip"
+  ],
+  "apps": {}
+}
