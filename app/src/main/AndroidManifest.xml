@@ -1,17 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 权限声明就这 5 条，没有定位 / 通讯录 / 短信 / 通话 / 存储 / 相机 / 麦克风 / 悬浮窗 / 设备标识：
+         INTERNET                             只有开 DNS 层时才发网络请求（转发 DNS 查询）
+         FOREGROUND_SERVICE(_SPECIAL_USE)     DNS 层要常驻一个前台服务（系统要求必须带通知）
+         POST_NOTIFICATIONS                   显示上面那条常驻通知
+         REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 让用户能把本 App 从电池优化里豁免，否则会被系统杀
+         另外两个 BIND_* 权限是系统对「无障碍服务 / 通知监听」自己的强制要求，写在下面两个 service 上。 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Android 11+ 的包可见性：
+         1) 查本机桌面(HOME)应用 → 运行时动态识别桌面，用户换了桌面也能跟上；
+         2) 查下面这些厂商设置组件 →「自启动 / 耗电管理」一键跳转（只列一加 / ColorOS 用到的） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oplus.safecenter" />
+        <package android:name="com.oppo.safecenter" />
+        <package android:name="com.coloros.phonemanager" />
+        <package android:name="com.oplus.battery" />
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light">
 

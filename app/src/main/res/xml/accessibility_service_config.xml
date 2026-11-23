@@ -6,5 +6,6 @@
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:description="@string/acc_desc"
-    android:notificationTimeout="50"
+    android:isAccessibilityTool="true"
+    android:notificationTimeout="250"
     android:summary="@string/acc_summary" />

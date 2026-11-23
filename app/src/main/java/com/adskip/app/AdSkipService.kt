@@ -2,6 +2,8 @@ package com.adskip.app
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Context
+import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
@@ -9,6 +11,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.InputMethodManager
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
@@ -34,12 +37,18 @@ import kotlin.math.abs
 class AdSkipService : AccessibilityService() {
 
     companion object {
-        private const val MAX_NODES = 2000
+        private const val MAX_NODES = 800
         private const val MAX_DEPTH = 40
         private const val MIN_CLICK_INTERVAL_MS = 320L
         private const val MAX_CLICKS_PER_WINDOW = 4
-        private const val CONTENT_SCAN_WINDOW_MS = 25000L
-        private const val SCAN_MIN_GAP_MS = 130L
+        private const val CONTENT_SCAN_WINDOW_MS = 12000L
+        private const val SCAN_MIN_GAP_MS = 300L
+
+        /** 点中一次之后短暂静默：广告已经开始播了，再扫也没意义，省掉整段扫描 */
+        private const val QUIET_AFTER_CLICK_MS = 1500L
+
+        /** 事件防抖窗口：连续的内容变化事件合并成一次扫描，避免定时器被无限推迟（那样一次都不扫） */
+        private const val EVENT_DEBOUNCE_MS = 600L
 
         /** 同一个位置刚点过就别再点，防止在一块内容上连点 */
         private const val SAME_SPOT_COOLDOWN_MS = 6000L
@@ -75,6 +84,21 @@ class AdSkipService : AccessibilityService() {
             "com.sec.android.app.launcher",
             "com.samsung.android.honeyboard",
             "com.samsung.android.app.cocktailbarservice",
+            // OPPO / 一加 / realme（ColorOS · OxygenOS，同一套 oplus 底层）的系统界面类：
+            // 桌面、状态栏、安全中心、OEM 输入法。这些地方点错代价最大，一律不碰。
+            "com.android.launcher",
+            "com.oplus.launcher",
+            "com.oppo.launcher",
+            "net.oneplus.launcher",
+            "com.oplus.systemui",
+            "com.coloros.systemui",
+            "com.oppo.systemui",
+            "com.oplus.safecenter",
+            "com.coloros.safecenter",
+            "com.oplus.securitykeyboard",
+            "com.coloros.securitykeyboard",
+            "com.oplus.keyboard",
+            "com.baidu.input_oppo",
             "com.adskip.app"
         )
 
@@ -83,8 +107,11 @@ class AdSkipService : AccessibilityService() {
             "com.sec.android.app.launcher",
             "com.google.android.apps.nexuslauncher",
             "com.android.launcher3",
-            "com.huawei.android.launcher",
-            "com.miui.home",
+            // ColorOS / OxygenOS 的桌面（不同版本名字不一样，全列上；运行时会再从系统里动态补）
+            "com.android.launcher",
+            "com.oplus.launcher",
+            "com.oppo.launcher",
+            "net.oneplus.launcher",
             "com.adskip.app"
         )
     }
@@ -116,8 +143,25 @@ class AdSkipService : AccessibilityService() {
     private var lastScanAt = 0L
     private var clicksInWindow = 0
     private var lastClickAt = 0L
+    /** 这个时间点之前不再扫描（点中后静默一小会儿） */
+    private var quietUntil = 0L
+    /** 扫描是否已经排队 + 排队时间（用于事件防抖） */
+    private var scanPending = false
+    private var pendingAt = 0L
     private var lastClickBounds: Rect? = null
     private var lastGuardNote: String? = null
+
+    /**
+     * 运行期算出来的「系统界面类」包名 = 静态兜底列表 + 本机桌面(HOME) + 本机输入法。
+     * 这样不管手机是三星、一加还是别的品牌，桌面和输入法都能自动认出来，
+     * 不用再为每个品牌改代码（ColorOS 的桌面包名好几个版本都不一样，硬编码迟早会漏）。
+     */
+    @Volatile
+    private var systemPkgs: Set<String> = STATIC_EXCLUDE
+
+    /** 运行期算出来的「本机桌面」包名：看到它就说明用户已经离开当前 App */
+    @Volatile
+    private var homePkgs: Set<String> = LEAVE_HINTS
 
     @Volatile
     private var lastSummary: String = ""
@@ -129,6 +173,7 @@ class AdSkipService : AccessibilityService() {
         val r = RuleEngine(this)
         r.load()
         rules = r
+        loadSystemPackages()
         val t = HandlerThread("adskip-scan")
         t.start()
         thread = t
@@ -160,6 +205,44 @@ class AdSkipService : AccessibilityService() {
         thread = null
     }
 
+    /**
+     * 把「本机桌面」和「本机输入法」读出来并进排除列表。
+     *
+     * 查 HOME 需要 Android 11+ 的包可见性，manifest 里已声明 <queries>（MAIN/HOME）。
+     * 任何一步失败都只是退回静态列表，不影响主功能。
+     */
+    private fun loadSystemPackages() {
+        val sys = HashSet<String>(STATIC_EXCLUDE)
+        val homes = HashSet<String>(LEAVE_HINTS)
+        try {
+            val homeIntent = Intent(Intent.ACTION_MAIN)
+            homeIntent.addCategory(Intent.CATEGORY_HOME)
+            for (ri in packageManager.queryIntentActivities(homeIntent, 0)) {
+                val p = ri.activityInfo?.packageName ?: continue
+                if (p.isNotEmpty()) {
+                    sys.add(p)
+                    homes.add(p)
+                }
+            }
+        } catch (t: Throwable) {
+            LogStore.log("SVC", "读取本机桌面包名失败: " + t.message)
+        }
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            if (imm != null) {
+                for (info in imm.enabledInputMethodList) {
+                    val p = info.packageName
+                    if (!p.isNullOrEmpty()) sys.add(p)
+                }
+            }
+        } catch (t: Throwable) {
+            LogStore.log("SVC", "读取本机输入法包名失败: " + t.message)
+        }
+        systemPkgs = sys
+        homePkgs = homes
+        LogStore.log("SVC", "系统包名 " + sys.size + " 个，桌面 " + homes.size + " 个")
+    }
+
     override fun onInterrupt() {
     }
 
@@ -170,7 +253,7 @@ class AdSkipService : AccessibilityService() {
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 val pkg = e.packageName?.toString() ?: return
-                if (LEAVE_HINTS.contains(pkg)) {
+                if (homePkgs.contains(pkg)) {
                     // 用户切到了桌面/本 App，说明离开了原来的应用
                     leftApp = true
                     return
@@ -187,7 +270,8 @@ class AdSkipService : AccessibilityService() {
                 lastScanAt = 0L
                 lastClickBounds = null
                 lastGuardNote = null
-                scheduleScan(50L)
+                // 换窗口要立刻扫（这一下是跳开屏广告的关键），不受事件防抖影响
+                scheduleScan(50L, true)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (currentPkg == null) return
@@ -198,8 +282,17 @@ class AdSkipService : AccessibilityService() {
         }
     }
 
-    private fun scheduleScan(delay: Long) {
+    /**
+     * 合并连续事件：原来每次事件都 removeCallbacks + postDelayed，
+     * 事件间隔一直小于延迟（动画 / 视频 / 加载圈）时，定时器会被无限往后推，一次都不扫。
+     * 现在 600ms 内只认第一次排期，真正的扫描由 SCAN_MIN_GAP_MS 控制频率。
+     */
+    private fun scheduleScan(delay: Long, force: Boolean = false) {
         val h = scanHandler ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && scanPending && now - pendingAt < EVENT_DEBOUNCE_MS) return
+        scanPending = true
+        pendingAt = now
         h.removeCallbacks(scanTask)
         h.postDelayed(scanTask, delay)
     }
@@ -212,6 +305,7 @@ class AdSkipService : AccessibilityService() {
             LogStore.log("SVC", "扫描异常: " + t.message)
         } finally {
             busy.set(false)
+            scanPending = false
         }
     }
 
@@ -219,6 +313,7 @@ class AdSkipService : AccessibilityService() {
         if (!Prefs.masterEnabled(this)) return
         val r = rules ?: return
         val now = SystemClock.elapsedRealtime()
+        if (now < quietUntil) return
         if (now - windowStart > CONTENT_SCAN_WINDOW_MS) return
         if (lastScanAt != 0L && now - lastScanAt < SCAN_MIN_GAP_MS) return
         if (clicksInWindow >= MAX_CLICKS_PER_WINDOW) return
@@ -276,6 +371,7 @@ class AdSkipService : AccessibilityService() {
         val ok = clickNode(cand, sw, sh)
         if (ok) {
             lastClickAt = SystemClock.elapsedRealtime()
+            quietUntil = lastClickAt + QUIET_AFTER_CLICK_MS
             clicksInWindow++
             lastClickBounds = cb?.let { Rect(it) }
             Prefs.bumpCount(this)
@@ -291,7 +387,7 @@ class AdSkipService : AccessibilityService() {
      * 广度优先遍历当前窗口，找出最像「跳过/关闭广告」的那个控件。
      *
      * 注意：inList() / targetOk() 这类父链检查只在「已经命中」的节点上做，
-     * 不会对 2000 个节点全做一遍（那要走几万次跨进程调用，太慢）。
+     * 不会对 800 个节点全做一遍（那要走几万次跨进程调用，太慢）。
      */
     private fun findBest(
         r: RuleEngine,
@@ -324,18 +420,18 @@ class AdSkipService : AccessibilityService() {
             } catch (t: Throwable) {
                 0
             }
-            for (i in 0 until childCount) {
-                val c = try {
-                    node.getChild(i)
-                } catch (t: Throwable) {
-                    null
+            // 列表容器的整棵子树直接剪掉：里面是信息流正文，不可能是开屏广告的跳过按钮，
+            // 而一屏几百上千个正文节点全走一遍要几万次跨进程调用（这才是耗电的大头）。
+            if (childCount > 0 && !isListContainer(node)) {
+                for (i in 0 until childCount) {
+                    val c = try {
+                        node.getChild(i)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    if (c != null) queue.add(c to (depth + 1))
                 }
-                if (c != null) queue.add(c to (depth + 1))
             }
-
-            val bounds = boundsOf(node) ?: continue
-            val area = bounds.width().toLong() * bounds.height().toLong()
-            if (area > screenArea * 85L / 100L) continue
 
             val text = node.text?.toString()?.trim()
             val desc = node.contentDescription?.toString()?.trim()
@@ -358,6 +454,12 @@ class AdSkipService : AccessibilityService() {
                 gestureOk = false
             }
             if (score == 0) continue
+
+            // 先判断「像不像目标」再取坐标：绝大多数节点在这里就被排除了，
+            // 省掉每个节点一次 getBoundsInScreen 跨进程调用。
+            val bounds = boundsOf(node) ?: continue
+            val area = bounds.width().toLong() * bounds.height().toLong()
+            if (area > screenArea * 85L / 100L) continue
 
             // 护栏 1：尺寸不像按钮 → 多半是整块广告、卡片或标记牌，点了就打开内容
             if (!targetOk(bounds, sw, sh)) {
@@ -389,6 +491,20 @@ class AdSkipService : AccessibilityService() {
             }
         }
         return ScanResult(best, visited, guardNote)
+    }
+
+    /** 这个节点是不是列表 / 复用容器：是的话整棵子树不用看（信息流正文） */
+    private fun isListContainer(node: AccessibilityNodeInfo): Boolean {
+        val cls = try {
+            node.className?.toString() ?: ""
+        } catch (t: Throwable) {
+            ""
+        }
+        if (cls.isEmpty()) return false
+        for (h in LIST_CLASS_HINTS) {
+            if (cls.contains(h, ignoreCase = true)) return true
+        }
+        return false
     }
 
     private fun textOrDesc(
@@ -533,7 +649,7 @@ class AdSkipService : AccessibilityService() {
     }
 
     private fun isExcluded(pkg: String): Boolean {
-        if (STATIC_EXCLUDE.contains(pkg)) return true
+        if (systemPkgs.contains(pkg)) return true
         if (Prefs.blacklist(this).contains(pkg)) return true
         return false
     }

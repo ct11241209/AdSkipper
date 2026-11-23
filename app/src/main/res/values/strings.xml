@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">跳过广告</string>
     <string name="acc_label">跳过广告 · 自动点击</string>
-    <string name="acc_desc">自动识别并点击其他应用中的「跳过」「关闭广告」等按钮，用于跳过开屏广告和应用内弹窗广告。本服务只在检测到广告按钮时点击，不读取、不上传任何内容。</string>
+    <string name="acc_desc">自动识别并点击其他应用中的「跳过」「关闭广告」等按钮，用于跳过开屏广告和应用内弹窗广告。屏幕上的文字只在本机内存里做匹配，不保存、不截图、不上传；日志最多 400 条，重启即清空。</string>
     <string name="acc_summary">自动跳过开屏广告与应用内弹窗</string>
 </resources>

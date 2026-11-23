@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -94,7 +95,18 @@ class MainActivity : Activity() {
         scroll.addView(root)
 
         root.addView(heading("跳过广告 · AdSkipper"))
-        root.addView(note("免 root。两层：① 无障碍自动点「跳过/关闭」② 本地 DNS 拦截广告域名。全部在本机完成，App 自己不联网、不上传任何数据。"))
+        root.addView(
+            note(
+                "免 root，只在本机跑。适配：三星（One UI）、一加（ColorOS / OxygenOS）；其他品牌未适配，可能能用但不保证。\n" +
+                    "两层：① 无障碍自动点「跳过 / 关闭」② 本地 DNS 拦广告域名（可选）。\n" +
+                    "不采集、不上传任何内容：屏幕文字只在本机内存里做匹配，日志最多 400 条、重启即清空；空闲时不扫描、不轮询、不持有 wake lock。"
+            )
+        )
+
+        val brandView = note(brandBanner())
+        brandView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        brandView.setTextColor(0xFF444444.toInt())
+        root.addView(brandView)
 
         statusView = TextView(this)
         statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -141,6 +153,19 @@ class MainActivity : Activity() {
         row2.addView(button("统计清零") { Prefs.resetCount(this); refresh(); toast("已清零") }, weight1())
         root.addView(row2)
 
+        // ---------------- 本机厂商设置（防后台清理 / 高级保护）
+        val gapBrand = View(this)
+        gapBrand.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(14))
+        root.addView(gapBrand)
+
+        root.addView(heading("本机设置（让无障碍不被系统杀掉）"))
+        root.addView(note(brandSetupHint()))
+        val row3 = LinearLayout(this)
+        row3.orientation = LinearLayout.HORIZONTAL
+        row3.addView(button("本 App 应用详情") { openAppDetails() }, weight1())
+        row3.addView(button("自启动 / 耗电管理") { openAutoStart() }, weight1())
+        root.addView(row3)
+
         // ---------------- DNS 层
         val gap = View(this)
         gap.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(14))
@@ -159,7 +184,7 @@ class MainActivity : Activity() {
             note(
                 "只接管 DNS 查询，不代理网页流量，耗电极低。\n" +
                     "注意：会占用系统 VPN 通道（和公司的 VPN / 梯子 冲突，二选一）；\n" +
-                    "开启前必须把 设置→连接→更多连接设置→私人 DNS 改成「关闭」，否则拦截不生效。\n" +
+                    "开启前必须把 " + privateDnsPath() + " 改成「关闭」，否则拦截不生效。\n" +
                     "开完用几分钟手机，回来点上面的「统计」按钮：如果「收到查询」一直是 0，说明这层没打通，直接关掉它。\n" +
                     "如果开了之后某些 App 图片加载不出来，就是这层拦多了，先关掉它。"
             )
@@ -220,6 +245,126 @@ class MainActivity : Activity() {
         val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         p.setMargins(dp(2), dp(2), dp(2), dp(2))
         return p
+    }
+
+    // ---------------------------------------------------------------- 品牌 / 厂商差异
+
+    /**
+     * oplus 底层判定（ColorOS）：一加是适配目标；OPPO / realme 同源，只作为「跳转系统设置」的技术兜底，
+     * 不是支持承诺。
+     */
+    private fun isColorOs(): Boolean {
+        val m = (Build.MANUFACTURER ?: "").lowercase()
+        val b = (Build.BRAND ?: "").lowercase()
+        if (m.contains("oppo") || m.contains("oneplus") || m.contains("realme")) return true
+        if (b.contains("oppo") || b.contains("oneplus") || b.contains("realme")) return true
+        for (p in arrayOf("com.oplus.safecenter", "com.coloros.safecenter", "com.oppo.safecenter")) {
+            try {
+                packageManager.getPackageInfo(p, 0)
+                return true
+            } catch (t: Throwable) {
+                // 这个包不存在，继续试下一个
+            }
+        }
+        return false
+    }
+
+    /** 一次算好：buildUi 会间接调用好几次，每次都可能要 getPackageInfo 抛异常（非 ColorOS 机器很贵） */
+    private val colorOs: Boolean by lazy { isColorOs() }
+
+    private val onOnePlus: Boolean by lazy {
+        val m = (Build.MANUFACTURER ?: "").lowercase()
+        val b = (Build.BRAND ?: "").lowercase()
+        m.contains("oneplus") || b.contains("oneplus")
+    }
+
+    private fun isSamsung(): Boolean = (Build.MANUFACTURER ?: "").lowercase().contains("samsung")
+
+    private fun brandName(): String {
+        val m = (Build.MANUFACTURER ?: "").lowercase()
+        return when {
+            m.contains("samsung") -> "三星 · One UI"
+            onOnePlus -> "一加 · ColorOS / OxygenOS"
+            colorOs -> "未适配 · OPPO / realme（ColorOS）"
+            m.isBlank() -> "未适配 · 未知厂商"
+            else -> "未适配 · " + Build.MANUFACTURER
+        }
+    }
+
+    /** 顶部一条：本机品牌 + 系统版本 + 这一版针对新系统的注意事项。 */
+    private fun brandBanner(): String {
+        val sb = StringBuilder()
+        sb.append("本机：").append(brandName()).append(" · Android ").append(Build.VERSION.RELEASE)
+        sb.append("（API ").append(Build.VERSION.SDK_INT).append("）\n")
+        if (Build.VERSION.SDK_INT >= 37) {
+            sb.append("Android 17 提示：开了系统「高级保护(Advanced Protection)」时，系统只允许被认定为无障碍工具的服务使用无障碍功能。")
+            sb.append("本版按官方要求声明了 isAccessibilityTool，但仅声明不等于一定通过系统认定；")
+            sb.append("如果无障碍还是开不起来，先去 设置 → 安全与隐私 → 高级保护 里关掉它再试。\n")
+        }
+        when {
+            onOnePlus -> sb.append("ColorOS 提示：装好后必须去应用详情开「允许自启动」和「允许完全后台行为」，否则几分钟后无障碍会被系统杀掉。\n")
+            colorOs -> sb.append("本机是 OPPO / realme：和一加同源（ColorOS），大概能用，但这一版只对一加做了适配，不保证。\n")
+            isSamsung() -> sb.append("One UI 提示：把本 App 加进「永不休眠的应用」，并关掉「不使用时移除权限」。\n")
+            else -> sb.append("本机品牌未适配：可能能用，但不保证；有问题就关掉对应功能，别当 bug 报。\n")
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /** 「本机设置」段落里的分品牌操作说明。 */
+    private fun brandSetupHint(): String = when {
+        onOnePlus ->
+            "一加（ColorOS / OxygenOS）：应用详情 →「耗电管理」→ 打开「允许完全后台行为」和「允许自启动」；" +
+                "再到最近任务里把本 App 锁定（在最近任务里下拉卡片或长按 → 锁定），侧滑清后台也不会被杀。"
+        colorOs ->
+            "本机是 OPPO / realme（ColorOS，未适配，可能可用但不保证）：同样去应用详情把「允许完全后台行为」「允许自启动」打开，并在最近任务里锁定。"
+        isSamsung() ->
+            "三星 One UI：装之前先关掉「自动拦截器」；装好后把本 App 加进「永不休眠的应用」，" +
+                "并关掉「不使用时移除权限」。"
+        else ->
+            "本机品牌未适配（可能能用但不保证）：把自启动、后台运行、电池优化都放开（下面两个按钮能跳过去）。"
+    }
+
+    /** 各 ROM 里「私人 DNS」入口路径不同，写死三星路径会误导别的手机。 */
+    private fun privateDnsPath(): String = when {
+        colorOs -> "设置 → 连接与共享 → 私人 DNS"
+        isSamsung() -> "设置 → 连接 → 更多连接设置 → 私人 DNS"
+        Build.VERSION.SDK_INT >= 28 -> "设置 → 网络和互联网 → 私人 DNS"
+        else -> "设置 → 更多连接 → 私人 DNS（Android 9+ 才有这个菜单，你这台可能没有）"
+    }
+
+    private fun openAppDetails() {
+        try {
+            val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            i.data = Uri.parse("package:" + packageName)
+            startActivity(i)
+        } catch (t: Throwable) {
+            toast("打不开应用详情，请手动到 设置 → 应用管理 → 跳过广告")
+        }
+    }
+
+    /** 试着直接跳到本机「自启动 / 耗电管理」。各家组件名不同，全失败就退回应用详情。 */
+    private fun openAutoStart() {
+        val candidates = arrayOf(
+            ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+            ComponentName("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"),
+            ComponentName("com.oppo.safecenter", "com.oppo.safecenter.permission.startup.StartupAppListActivity"),
+            ComponentName("com.coloros.phonemanager", "com.coloros.phonemanager.permission.startup.StartupAppListActivity"),
+            ComponentName("com.oplus.battery", "com.oplus.battery.BatteryActivity")
+        )
+        for (c in candidates) {
+            try {
+                val i = Intent()
+                i.component = c
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+                toast("在打开的列表里找到「跳过广告」，允许自启动 / 后台运行")
+                return
+            } catch (t: Throwable) {
+                // 这台机器没有这个入口，试下一个
+            }
+        }
+        toast("没找到本机「自启动」入口，已打开应用详情，手动去 耗电管理 / 自启动")
+        openAppDetails()
     }
 
     private fun parsePackages(raw: String): Set<String> {

@@ -26,6 +26,26 @@ class DnsProxy(
         private const val UPSTREAM_TIMEOUT_MS = 2500
         private val UPSTREAMS = arrayOf("223.5.5.5", "119.29.29.29", "180.76.76.76")
         private const val MAX_PACKET = 32768
+
+        /** 上游 IP 只解析一次（纯 IP 字面量走 getByName 也要过一遍解析路径，每条查询都做太浪费） */
+        private val UPSTREAM_ADDRS: Array<InetAddress?> by lazy {
+            Array(UPSTREAMS.size) { i ->
+                try {
+                    InetAddress.getByName(UPSTREAMS[i])
+                } catch (t: Throwable) {
+                    null
+                }
+            }
+        }
+
+        /** 本机在 tun 里的地址（构造回包要用），只解析一次 */
+        private val MY_IP_BYTES: ByteArray by lazy {
+            try {
+                InetAddress.getByName(MY_IP).address
+            } catch (t: Throwable) {
+                byteArrayOf(10, 111, 222.toByte(), 3)
+            }
+        }
     }
 
     @Volatile
@@ -165,7 +185,10 @@ class DnsProxy(
     }
 
     private fun forward(query: ByteArray): ByteArray? {
-        for (up in UPSTREAMS) {
+        // 读缓冲复用：单线程循环里没有并发，不用每条查询都新分配 4KB
+        val rbuf = ByteArray(4096)
+        for (i in UPSTREAMS.indices) {
+            val addr = UPSTREAM_ADDRS[i] ?: continue
             val socket: DatagramSocket = try {
                 DatagramSocket()
             } catch (t: Throwable) {
@@ -173,9 +196,7 @@ class DnsProxy(
             } ?: continue
             try {
                 socket.soTimeout = UPSTREAM_TIMEOUT_MS
-                val addr = InetAddress.getByName(up)
                 socket.send(DatagramPacket(query, query.size, addr, 53))
-                val rbuf = ByteArray(4096)
                 val rp = DatagramPacket(rbuf, rbuf.size)
                 socket.receive(rp)
                 if (rp.length > 0) return rbuf.copyOf(rp.length)
@@ -207,7 +228,7 @@ class DnsProxy(
         p[9] = 17
         p[10] = 0
         p[11] = 0
-        val myIp = InetAddress.getByName(MY_IP).address
+        val myIp = MY_IP_BYTES
         System.arraycopy(myIp, 0, p, 12, 4)
         System.arraycopy(clientIp, 0, p, 16, 4)
 

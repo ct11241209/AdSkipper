@@ -1,18 +1,18 @@
 {
-  "version": 3,
+  "version": 4,
   "launchWindowMs": 12000,
-
-  "_说明": "跳/关规则。注意：不要往 skipPatterns 里加「广告」这种纯标签词，信息流里每条广告卡都有「广告」标签，点了就是点进广告。apps 里可以给单个 App 加 splashOnlyMs（只在前 N 毫秒内工作）和专属正则。",
-
+  "_说明": "跳/关规则。注意：不要往 skipPatterns 里加「广告」这种纯标签词，信息流里每条广告卡都有「广告」标签，点了就是点进广告。apps 里可以给单个 App 加 splashOnlyMs（只在前 N 毫秒内工作）和专属正则。v4 新增：倒计时在前面的文案（5s | 跳过 / 5 跳过）、更多广告 SDK 的跳过控件 id、一加(ColorOS) 自带 App 与国内主流 App 的开屏窗口限制。",
   "skipPatterns": [
     "^跳过",
     "^点击跳过",
     "跳过.{0,8}(广告|\\d+\\s*[s秒S])",
+    "^\\d{1,2}\\s*[sS秒]?\\s*[|｜/·]?\\s*跳过\\s*[>》]?$",
     "^关闭广告$",
+    "^关闭广告\\s*[\\d>》]*$",
     "^skip(\\s*ad)?$",
-    "^skip\\b"
+    "^skip\\b",
+    "^skip\\s*\\d+\\s*[sS]?$"
   ],
-
   "closePatterns": [
     "^关闭广告$",
     "^残忍离开$",
@@ -22,7 +22,6 @@
     "^skip$",
     "^close ad$"
   ],
-
   "aggressiveClosePatterns": [
     "^关闭$",
     "^×$",
@@ -36,7 +35,6 @@
     "^no,? thanks$",
     "^not now$"
   ],
-
   "skipIds": [
     "btn_skip",
     "tv_skip",
@@ -48,19 +46,131 @@
     "splash_skip",
     "skip_ad",
     "iv_skip",
-    "img_skip"
+    "img_skip",
+    "skip_text",
+    "skip_button",
+    "btnskip",
+    "tt_splash_skip_btn",
+    "gdt_splash_skip",
+    "ksad_skip_view",
+    "splash_ad_skip",
+    "ad_skip_view",
+    "skip_ad_view",
+    "tt_splash_skip",
+    "ksad_splash_skip",
+    "ksad_splash_skip_view",
+    "gdt_count_down_view"
   ],
-
   "apps": {
     "com.baidu.tieba": {
       "splashOnlyMs": 15000,
-      "skipPatterns": ["^跳过\\s*\\d*\\s*[sS秒]?$"],
-      "closePatterns": ["^关闭广告$"]
+      "skipPatterns": [
+        "^跳过\\s*\\d*\\s*[sS秒]?$"
+      ],
+      "closePatterns": [
+        "^关闭广告$"
+      ]
     },
     "com.taobao.idlefish": {
       "splashOnlyMs": 15000,
-      "skipPatterns": ["^跳过\\s*\\d*\\s*[sS秒]?$"],
-      "closePatterns": ["^关闭广告$"]
+      "skipPatterns": [
+        "^跳过\\s*\\d*\\s*[sS秒]?$"
+      ],
+      "closePatterns": [
+        "^关闭广告$"
+      ]
+    },
+    "_一加_ColorOS自带App": "这些 App 自带开屏广告，但里面全是信息流/商店列表，限定「只在前 15 秒干活」，避免刷列表时误点。",
+    "com.heytap.market": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.browser": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.themestore": {
+      "splashOnlyMs": 15000
+    },
+    "com.coloros.video": {
+      "splashOnlyMs": 15000
+    },
+    "com.oplus.video": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.video": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.news": {
+      "splashOnlyMs": 15000
+    },
+    "com.coloros.news": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.music": {
+      "splashOnlyMs": 15000
+    },
+    "com.coloros.weather2": {
+      "splashOnlyMs": 12000
+    },
+    "com.heytap.yoli": {
+      "splashOnlyMs": 15000
+    },
+    "com.nearme.instant.platform": {
+      "splashOnlyMs": 8000
+    },
+    "com.heytap.pictorial": {
+      "splashOnlyMs": 15000
+    },
+    "com.heytap.quicksearchbox": {
+      "splashOnlyMs": 8000
+    },
+    "_国内主流App": "冷启动开屏广告很常见，之后就是信息流；同样只在前 15 秒工作。",
+    "com.sina.weibo": {
+      "splashOnlyMs": 15000
+    },
+    "com.zhihu.android": {
+      "splashOnlyMs": 15000
+    },
+    "com.xingin.xhs": {
+      "splashOnlyMs": 15000
+    },
+    "com.ss.android.ugc.aweme": {
+      "splashOnlyMs": 15000
+    },
+    "tv.danmaku.bili": {
+      "splashOnlyMs": 15000
+    },
+    "com.tencent.mobileqq": {
+      "splashOnlyMs": 15000
+    },
+    "com.taobao.taobao": {
+      "splashOnlyMs": 15000
+    },
+    "com.jingdong.app.mall": {
+      "splashOnlyMs": 15000
+    },
+    "com.xunmeng.pinduoduo": {
+      "splashOnlyMs": 15000
+    },
+    "com.smile.gifmaker": {
+      "splashOnlyMs": 15000
+    },
+    "com.sankuai.meituan": {
+      "splashOnlyMs": 15000
+    },
+    "com.netease.cloudmusic": {
+      "splashOnlyMs": 15000
+    },
+    "com.tencent.qqlive": {
+      "splashOnlyMs": 15000
+    },
+    "com.qiyi.video": {
+      "splashOnlyMs": 15000
+    },
+    "com.youku.phone": {
+      "splashOnlyMs": 15000
+    },
+    "com.ss.android.article.news": {
+      "splashOnlyMs": 15000
     }
   }
 }
